@@ -54,7 +54,6 @@ class ModelArguments:
     )
     loss_type: Optional[str] = field(default="sigmoid", metadata={"help": "The loss type."})
     if_lora: Optional[int] = field(default=0, metadata={"help": "Whether run lora or full training."})
-    model_type: Optional[str] = field(default="llama", metadata={"help": "Model identification type."})
     dpo_beta: Optional[float] = field(default=0.1, metadata={"help": "beta value in DPO/IPO loss"})
     cache_dir: Optional[str] = field(default="", metadata={"help": "cache dir of datasets"})
 
@@ -270,12 +269,12 @@ def main():
     training_args.update({'remove_unused_columns': False})
     training_args = TrainingArguments(**training_args)
 
-    if model_args.model_type == "llama":
+    if "llama3" in model_args.model_name_or_path:
         target_modules = [
             "q_proj",
             "v_proj"
         ]
-    elif model_args.model_type == "qwen":
+    elif "qwen" in model_args.model_name_or_path:
         target_modules = [
             "c_attn"
         ]
