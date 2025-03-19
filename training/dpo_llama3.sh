@@ -19,11 +19,11 @@ M_TYPE=llama  # default llama, llama / qwen2
 PER_GPU_BATCH=4
 GRA_ACC=4
 
-raw_model_path=/row_model_path/
+raw_model_path=/output_path/llama3_1_8B-SFT-mix/
 train_data_path=./data/roleMRC_train-rl_mix.jsonl
 eval_data_path=./data/roleMRC_dev-rl.jsonl
 deepspeed_config_path=./ds_config.json
-model_output_path=/output_path/${RLType}_llama3_1-8B-mix/
+model_output_path=/output_path/${RLType}_llama3_1_8B-DPO-mix/
 cache_path=./cache
 
 TRAINDATANUM=$(wc -l < "${train_data_path}")
