@@ -3,57 +3,27 @@ export GLOO_SOCKET_TIMEOUT=300
 export WANDB_MODE=disabled
 export NCCL_P2P_DISABLE=1
 
-# pip3 install --upgrade peft==0.5.0 datasets transformers==4.44.0 typing-extensions==4.11.0 accelerate==0.30.1 deepspeed==0.15.4
-
-MAXLEN=$1
-EPOCH=1
-SAVEINTERVAL=1
-train_data_file=$2
-postfix=$3
-SEED=42
 export GPU_NUM_PER_NODE=4
 export WORLD_SIZE=1
 
-pgb=$4
-acc=$5
-ds_file=$6
+MAXLEN=4200
+EPOCH=1
+SAVEINTERVAL=${EPOCH}
+SEED=42
+PER_GPU_BATCH=8
+GRA_ACC=2
+LR=2e-5
 
-model=$7
-# raw_model_path=Qwen/Qwen2.5-7B
-raw_model_path=meta-llama/Llama-3.1-8B
-train_data_path=./data/${train_data_file}
+raw_model_path=/raw_model_path/llama3_1_8B/
+train_data_path=./data/roleMRC_train-sft_mix.jsonl
 deepspeed_config_path=./ds_config.json
-model_output_path=/output_path/llama3_1_${model}-${postfix}-mix/
+model_output_path=/output_path/llama3_1_8B-SFT-mix/
 cache_path=./cache
-resume_path=${model_output_path}/$8
-
-case ${model} in 
-    "8B")
-        PER_GPU_BATCH=${pgb}
-        GRA_ACC=${acc}
-        LR=2e-5
-        ;;
-    "7B")
-        PER_GPU_BATCH=${pgb}
-        GRA_ACC=${acc}
-        LR=2e-5
-        ;;
-    "13B")
-        PER_GPU_BATCH=${pgb}
-        GRA_ACC=${acc}
-        LR=5e-6
-        ;;
-    "70B")
-        PER_GPU_BATCH=${pgb}
-        GRA_ACC=${acc}
-        LR=5e-6
-        ;;
-esac
+resume_path=${model_output_path}/None
 
 TRAINDATANUM=$(wc -l <"${train_data_path}")
 SAVESTEP=$(awk "BEGIN {print int(${TRAINDATANUM} * ${EPOCH} / (${PER_GPU_BATCH} * ${GRA_ACC} * $GPU_NUM_PER_NODE * ${SAVEINTERVAL} * $WORLD_SIZE)) + 1}")
 TOTALSTEP=$(awk "BEGIN {print int(${TRAINDATANUM} * ${EPOCH} / (${PER_GPU_BATCH} * ${GRA_ACC} * $GPU_NUM_PER_NODE * $WORLD_SIZE)) + 1}")
-# EVALSTEP=100
 echo "We use $WORLD_SIZE nodes to train with ${TRAINDATANUM} samples for ${EPOCH} epochs, resulting in ${TOTALSTEP} running steps, and thus we will save checkpoints every ${SAVESTEP} steps."
 
 # training
