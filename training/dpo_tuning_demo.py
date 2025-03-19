@@ -27,9 +27,7 @@ from peft import (
     LoraConfig
 )
 from peft.tuners.lora import LoraLayer
-from dpo_trainer import DPOTrainer
-
-from orpo_trainer import ORPOTrainer
+from trl import DPOTrainer
 
 from deepspeed import zero
 from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
@@ -58,16 +56,6 @@ class ModelArguments:
     if_lora: Optional[int] = field(default=0, metadata={"help": "Whether run lora or full training."})
     model_type: Optional[str] = field(default="llama", metadata={"help": "Model identification type."})
     dpo_beta: Optional[float] = field(default=0.1, metadata={"help": "beta value in DPO/IPO loss"})
-    add_noise: Optional[int] = field(default=0, metadata={"help": "Whether do noise trails."})
-    len_norm: Optional[int] = field(default=0, metadata={"help": "Whether normalize rewards by length."})
-    neft_alpha: Optional[float] = field(default=5.0, metadata={"help": "alpha value of neft noise"})
-    dpop_lambda: Optional[float] = field(default=50.0, metadata={"help": "lambda value in DPOP loss"})
-    sft_lambda: Optional[float] = field(default=0.05, metadata={"help": "lambda value in mix loss (SFT + DPO)"})
-    l1_lambda: Optional[float] = field(default=0.1, metadata={"help": "lambda value in l1 loss"})
-    tdpo_alpha: Optional[float] = field(default=0.5, metadata={"help": "alpha value in tdpo loss"})
-    lnorm_type: Optional[str] = field(default="scale", metadata={"help": "The length normalization type, could be scale, top, or random."})
-    lnorm_loc: Optional[str] = field(default="logrs", metadata={"help": "The place to apply length normalization, could be logps, or logrs."})
-    simpo_lambda: Optional[float] = field(default=0.5, metadata={"help": "lambda value in simpo loss"})
     cache_dir: Optional[str] = field(default="", metadata={"help": "cache dir of datasets"})
 
 @dataclass
@@ -184,6 +172,7 @@ def main():
                 # User speaks, labels need masks
                 message_text += "<|start_header_id|>user<|end_header_id|>\n\n" + message["content"].strip() + "<|eot_id|>" + "<|start_header_id|>assistant<|end_header_id|>\n\n"
         return system_text + message_text
+    
     def pack_Qwen2(example):
         system_text = "<|im_start|>system\n" + example[0]["content"].strip() + "<|im_end|>\n"
         if example[1]["role"] == "User":
@@ -203,6 +192,7 @@ def main():
                 # User speaks, labels need masks
                 message_text += "<|im_start|>user\n" + message["content"].strip() + "<|im_end|>\n" + "<|im_start|>assistant\n"
         return system_text + message_text
+    
     def preprocess_function(examples, subset=None):
         prepared_inputs = {"prompt": [], "chosen": [], "rejected": []}
         for p, c, r in zip(examples["prompt"], examples["chosen"], examples["rejected"]):
@@ -258,7 +248,7 @@ def main():
 
     # initialize modules
     model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, config=config, trust_remote_code=True, use_flash_attention_2=True)
-    if model_args.if_lora == 0 and model_args.loss_type not in ["orpo", "simpo"]:
+    if model_args.if_lora == 0:
         ref_model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, trust_remote_code=True, use_flash_attention_2=True)
             
     if hasattr(model, "enable_input_require_grads"):
@@ -271,7 +261,7 @@ def main():
 
     if len(tokenizer) > tokenizer.vocab_size:
         model.resize_token_embeddings(len(tokenizer))
-        if model_args.if_lora == 0 and model_args.loss_type not in ["orpo", "simpo"]:
+        if model_args.if_lora == 0:
             ref_model.resize_token_embeddings(len(tokenizer))
 
     # Setup Trainer
@@ -289,14 +279,6 @@ def main():
         target_modules = [
             "c_attn"
         ]
-    elif model_args.model_type == "baichuan2":
-        target_modules = [
-            "W_pack"
-        ]
-    else:
-        target_modules = [
-            "W_pack"
-        ]
     
     if model_args.if_lora != 0:
         peft_config = LoraConfig(
@@ -311,41 +293,18 @@ def main():
         model.print_trainable_parameters()
         ref_model = None
 
-    if model_args.loss_type in ["orpo", "simpo"]:
-        trainer = ORPOTrainer(
-            model=model,
-            args=training_args,
-            beta=model_args.dpo_beta, # DPO temprature
-            train_dataset=prepared_dataset["train"],
-            eval_dataset=prepared_dataset["valid"],
-            tokenizer=tokenizer,
-            max_length=data_args.model_max_length,
-            max_prompt_length=int(data_args.model_max_length) * 3 // 4,
-            loss_type=model_args.loss_type,
-            simpo_lambda=model_args.simpo_lambda
-        )
-    else:
-        trainer = DPOTrainer(
-            model=model,
-            ref_model=ref_model,
-            beta=model_args.dpo_beta, # DPO temprature
-            train_dataset=prepared_dataset["train"],
-            eval_dataset=prepared_dataset["valid"],
-            tokenizer=tokenizer,
-            args=training_args,
-            max_length=data_args.model_max_length,
-            max_prompt_length=int(data_args.model_max_length) * 3 // 4,
-            loss_type=model_args.loss_type,
-            len_norm=True if model_args.len_norm == 1 else False,
-            lnorm_loc=model_args.lnorm_loc,
-            lnorm_type=model_args.lnorm_type,
-            dpop_lambda=model_args.dpop_lambda,
-            sft_lambda=model_args.sft_lambda,
-            l1_lambda=model_args.l1_lambda,
-            tdpo_alpha=model_args.tdpo_alpha,
-            add_noise=True if model_args.add_noise == 1 else False,
-            neft_alpha=model_args.neft_alpha
-        )
+    trainer = DPOTrainer(
+        model=model,
+        ref_model=ref_model,
+        beta=model_args.dpo_beta, # DPO temprature
+        train_dataset=prepared_dataset["train"],
+        eval_dataset=prepared_dataset["valid"],
+        tokenizer=tokenizer,
+        args=training_args,
+        max_length=data_args.model_max_length,
+        max_prompt_length=int(data_args.model_max_length) * 3 // 4,
+        loss_type=model_args.loss_type
+    )
 
     # Training
     train_result = trainer.train()
