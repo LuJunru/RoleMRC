@@ -5,13 +5,13 @@ Role-playing is important for Large Language Models (LLMs) to follow diverse ins
 - check our [paper](https://arxiv.org/abs/2502.11387), [data](https://huggingface.co/datasets/Junrulu/RoleMRC) and [local post-tuned models](https://huggingface.co/collections/Junrulu/rolemrc-67b2a4477a49eaea082ad33b). 
 - check [training](training) , [evaluation](evaluation), and [interpretation](interpretation) codes, respectively.
 
-# Straightforward Role-playing Example of RoleMRC
+# Straightforward Role Profile of RoleMRC
 <img src="./rolemrc_example.png" width="988px"></img>
 
-## Acknowledgment
+# Acknowledgment
 This code is built upon the [TRL](https://github.com/huggingface/trl) repository.
 
-## Citation
+# Citation
 ```
 @article{LUandLI2025RoleMRC,
   title={RoleMRC: A Fine-Grained Composite Benchmark for Role-Playing and Instruction-Following},
