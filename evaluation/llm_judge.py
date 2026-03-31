@@ -160,7 +160,6 @@ async def main():
     parser.add_argument("--api_base", type=str, default="", help="Judge API base URL (e.g. https://inference-api.nvidia.com/v1).")
     parser.add_argument("--api_key", type=str, default="", help="Judge API key.")
     parser.add_argument("--output_dir", type=str, default="./output", help="Directory for output files.")
-    parser.add_argument("--strip_thinking", default=False, action="store_true", help="Strip <think>...</think> from responses before judging.")
     args = parser.parse_args()
 
     # Set up logging and output dirs
@@ -184,15 +183,14 @@ async def main():
         test_data = test_data[:10]
 
     # Strip <think>...</think> from responses before judging
-    if args.strip_thinking:
-        stripped_count = 0
-        for idx, row in test_data.iterrows():
-            resp = str(row.get('response', ''))
-            if '</think>' in resp:
-                test_data.at[idx, 'response'] = resp.split('</think>')[-1].strip()
-                stripped_count += 1
-        if stripped_count:
-            print(f"Stripped thinking traces from {stripped_count}/{len(test_data)} responses")
+    stripped_count = 0
+    for idx, row in test_data.iterrows():
+        resp = str(row.get('response', ''))
+        if '</think>' in resp:
+            test_data.at[idx, 'response'] = resp.split('</think>')[-1].strip()
+            stripped_count += 1
+    if stripped_count:
+        print(f"Stripped thinking traces from {stripped_count}/{len(test_data)} responses")
 
     # Build tests
     all_queries = []

@@ -246,7 +246,6 @@ async def main():
     parser.add_argument("--max_tokens", type=int, default=256, help="Max output tokens.")
     parser.add_argument("--output_dir", type=str, default="./output", help="Directory for output files.")
     parser.add_argument("--data_path", type=str, default="", help="Override test data file path.")
-    parser.add_argument("--strip_thinking", default=False, action="store_true", help="Strip <think>...</think> from responses before scoring.")
     # parser.add_argument("--pre_tested", type=str, default="", help="Whether the model has been pre-tested.")
     args = parser.parse_args()
 
@@ -358,15 +357,14 @@ async def main():
             logger.info(f"Generation finished with {len(outputs)} instances.")
             responses = [output.outputs[0].text for output in outputs]
 
-        # Strip <think>...</think> from responses if requested
-        if args.strip_thinking:
-            stripped_count = 0
-            for i, resp in enumerate(responses):
-                if '</think>' in resp:
-                    responses[i] = resp.split('</think>')[-1].strip()
-                    stripped_count += 1
-            if stripped_count:
-                print(f"Stripped thinking traces from {stripped_count}/{len(responses)} responses")
+        # Strip <think>...</think> from responses
+        stripped_count = 0
+        for i, resp in enumerate(responses):
+            if '</think>' in resp:
+                responses[i] = resp.split('</think>')[-1].strip()
+                stripped_count += 1
+        if stripped_count:
+            print(f"Stripped thinking traces from {stripped_count}/{len(responses)} responses")
 
         # Add responses to the data
         for row, response in zip(data, responses):
