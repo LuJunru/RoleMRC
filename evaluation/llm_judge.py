@@ -9,10 +9,6 @@ import asyncio
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-file_handler = logging.FileHandler('./output/gpt4_judge.log')
-file_handler.setFormatter(formatter)
-logger.addHandler(file_handler)
 
 # Evalution Dimention 1: Role Knowledge Range Compliance
 KNOWLEDGE_RANGE = """
@@ -107,11 +103,16 @@ evaluation_config = {
 }
 
 class OALLM:
-    def __init__(self, model, temperature=0.7, max_length=256):
+    def __init__(self, model, temperature=0.7, max_length=256, api_base=None, api_key=None):
         self.model = model
         self.temperature = temperature
         self.max_length = max_length
-        self.client = AsyncOpenAI(api_key="please-input-your-openai-api-key")
+        kwargs = {}
+        if api_base:
+            kwargs["base_url"] = api_base
+        if api_key:
+            kwargs["api_key"] = api_key
+        self.client = AsyncOpenAI(**kwargs)
 
     async def generate(self, batch_messages):
         semaphore = asyncio.Semaphore(5)
@@ -156,7 +157,20 @@ async def main():
     parser.add_argument("--tempreture", type=float, default=0.7, help="Tempreture for the model.")
     parser.add_argument("--max_length", type=int, default=4, help="Max generation length.")
     parser.add_argument("--debug", default=False, action="store_true", help="Debug mode.")
-    args = parser.parse_args() 
+    parser.add_argument("--api_base", type=str, default="", help="OpenAI-compatible API base URL (e.g. http://localhost:8000/v1).")
+    parser.add_argument("--api_key", type=str, default="", help="API key (use 'EMPTY' for vLLM).")
+    parser.add_argument("--output_dir", type=str, default="./output", help="Directory for output files.")
+    parser.add_argument("--strip_thinking", default=False, action="store_true", help="Strip <think>...</think> from responses before judging.")
+    args = parser.parse_args()
+
+    # Set up logging and output dirs
+    os.makedirs(args.output_dir, exist_ok=True)
+    os.makedirs(os.path.join(args.output_dir, "logs"), exist_ok=True)
+    os.makedirs(os.path.join(args.output_dir, "llm_judge"), exist_ok=True)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler = logging.FileHandler(os.path.join(args.output_dir, "logs", "llm_judge.log"))
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
 
     if os.path.exists(args.test_path):
         test_data = pd.read_json(args.test_path, lines=True)
@@ -168,6 +182,17 @@ async def main():
 
     if args.debug:
         test_data = test_data[:10]
+
+    # Strip <think>...</think> from responses before judging
+    if args.strip_thinking:
+        stripped_count = 0
+        for idx, row in test_data.iterrows():
+            resp = str(row.get('response', ''))
+            if '</think>' in resp:
+                test_data.at[idx, 'response'] = resp.split('</think>')[-1].strip()
+                stripped_count += 1
+        if stripped_count:
+            print(f"Stripped thinking traces from {stripped_count}/{len(test_data)} responses")
 
     # Build tests
     all_queries = []
@@ -206,7 +231,9 @@ async def main():
     print(f"Generated {len(all_queries)} queries for evaluation. Test set size: {len(test_data)}.")
 
     # Initialize the LLM
-    llm = OALLM(args.model, temperature=args.tempreture, max_length=args.max_length)
+    llm = OALLM(args.model, temperature=args.tempreture, max_length=args.max_length,
+                 api_base=args.api_base if args.api_base else None,
+                 api_key=args.api_key if args.api_key else None)
     responses = await llm.generate(all_queries)
 
     # Evaluate the responses
@@ -237,11 +264,14 @@ async def main():
 
     logger.info(f"Evaluated {args.test_path}, Model: {args.model}, Tempreture: {args.tempreture}, Max Length: {args.max_length}.")
     filename = args.test_path.split("/")[-1]
-    result_path  = f"./logs/llm_as_judge.jsonl"
-    
-    # read json and append new results
-    with open(result_path, "r") as f:
-        summary = pd.read_json(f, lines=True)
+    result_path = os.path.join(args.output_dir, "logs", "llm_as_judge.jsonl")
+
+    # read json and append new results (create if missing)
+    if os.path.exists(result_path):
+        with open(result_path, "r") as f:
+            summary = pd.read_json(f, lines=True)
+    else:
+        summary = pd.DataFrame()
     # idx = 1
     # while filename in summary["filename"].values:
     #     filename = filename.replace(".jsonl", "")
@@ -277,8 +307,9 @@ async def main():
     # Save the responses
     all_queries = pd.DataFrame(all_queries)
     all_queries["response"] = responses
-    all_queries.to_json(f"./llm_judge/{filename}", orient="records", lines=True)
-    logger.info(f"Responses saved to evaluation/llm_judge/{filename}.")
+    judge_output_path = os.path.join(args.output_dir, "llm_judge", filename)
+    all_queries.to_json(judge_output_path, orient="records", lines=True)
+    logger.info(f"Responses saved to {judge_output_path}.")
 
 if __name__ == "__main__":
     asyncio.run(main())
