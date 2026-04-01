@@ -104,6 +104,34 @@ class OALLM:
             progress_bar.update(1)
             return completion.choices[0].message.content
 
+
+class VLLMServerLLM:
+    """Client for a running vLLM OpenAI-compatible server."""
+    def __init__(self, api_base, model_name, enable_thinking="on"):
+        self.client = OpenAI(base_url=api_base, api_key="EMPTY")
+        self.model = model_name
+        self.extra_body = {}
+        if enable_thinking == "off":
+            self.extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
+
+    async def generate(self, batch_messages, sampling_params):
+        responses = []
+        for messages in tqdm(batch_messages, desc="Generating responses"):
+            try:
+                completion = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=sampling_params.temperature,
+                    max_tokens=sampling_params.max_tokens,
+                    extra_body=self.extra_body,
+                )
+                responses.append(completion.choices[0].message.content or "")
+            except Exception as e:
+                logger.error(f"Error generating response: {e}")
+                responses.append("")
+        return responses
+
+
 rouge_score = rouge_scorer.RougeScorer(['rouge1', 'rouge2', 'rougeL', 'rougeLsum'], use_stemmer=True)
 async def evaluate_rouge(reference, response, row_idx):
     try:
@@ -212,6 +240,12 @@ async def main():
     parser.add_argument("--model", type=str, default="1", help="Model to evaluate.")
     parser.add_argument("--tensor_parallel_size", type=int, default=1, help="tensor_parallel_size for vLLM.")
     parser.add_argument("--debug", default=False, action="store_true", help="Debug mode.")
+    parser.add_argument("--api_base", type=str, default="", help="vLLM OpenAI-compatible API base URL (e.g. http://localhost:8000/v1). Uses API instead of loading model in-process.")
+    parser.add_argument("--served_model_name", type=str, default="", help="Model name served by vLLM (required with --api_base).")
+    parser.add_argument("--enable_thinking", type=str, default="on", choices=["on", "off"], help="Control thinking mode via chat_template_kwargs.")
+    parser.add_argument("--max_tokens", type=int, default=256, help="Max output tokens.")
+    parser.add_argument("--output_dir", type=str, default="./output", help="Directory for output files.")
+    parser.add_argument("--data_path", type=str, default="", help="Override test data file path.")
     # parser.add_argument("--pre_tested", type=str, default="", help="Whether the model has been pre-tested.")
     args = parser.parse_args()
 
@@ -226,15 +260,18 @@ async def main():
         test_task = [test_task]
 
     sampling_params = SamplingParams(
-        n=1, 
-        temperature=0.0, 
-        max_tokens=256
+        n=1,
+        temperature=0.0,
+        max_tokens=args.max_tokens
     )
 
     # Load the model and preprocess the data
     model_name = args.model
     
-    if model_name in OPENAI_MODELS:
+    if args.api_base:
+        served_name = args.served_model_name or model_name
+        llm = VLLMServerLLM(args.api_base, served_name, args.enable_thinking)
+    elif model_name in OPENAI_MODELS:
         llm = OALLM(model_name)
     else:
         # vLLM Configs
@@ -254,15 +291,24 @@ async def main():
         llm = LLM(**asdict(vllm_configs))
 
     # Start logging
+    os.makedirs(args.output_dir, exist_ok=True)
+    os.makedirs(os.path.join(args.output_dir, "logs"), exist_ok=True)
+    os.makedirs(os.path.join(args.output_dir, "logs", "configs"), exist_ok=True)
+    os.makedirs(os.path.join(args.output_dir, "logs", "results"), exist_ok=True)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    file_handler = logging.FileHandler(f"./logs/eval.log")
+    file_handler = logging.FileHandler(os.path.join(args.output_dir, "logs", "eval.log"))
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
     # save all configs
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
-    with open(f"./logs/configs/{model_name.split('/')[-1]}_{timestamp}_config.json", 'w') as file:
-        if model_name in OPENAI_MODELS:
+    with open(os.path.join(args.output_dir, "logs", "configs", f"{model_name.split('/')[-1]}_{timestamp}_config.json"), 'w') as file:
+        if args.api_base:
+            all_configs = {
+                "parser_args": vars(args),
+                "sampling_params": vars(sampling_params)
+            }
+        elif model_name in OPENAI_MODELS:
             all_configs = {
                 "parser_args": vars(args),
                 "sampling_params": vars(sampling_params)
@@ -286,14 +332,19 @@ async def main():
             raise ValueError(f"Test task {test_task} not recognized, avaliable tasks are: {AVALIABLE_TASKS} ")
 
         # Load and preprocess the dataset
-        data = load_dataset(test_config.test_file_path)
+        data_file = args.data_path if args.data_path else test_config.test_file_path
+        data = load_dataset(data_file)
         
         if args.debug:
             data = data[:10]
 
         logger.info(f"Evaluating {model_name} with {test_task}: total {len(data)} instances.")
 
-        if model_name in OPENAI_MODELS:
+        if args.api_base:
+            questions = [each[test_config.input_column] for each in data]
+            responses = await llm.generate(questions, sampling_params)
+            logger.info(f"Generation finished with {len(responses)} instances.")
+        elif model_name in OPENAI_MODELS:
             questions = [each[test_config.input_column] for each in data]
             # generate outputs
             outputs = await llm.generate(questions, sampling_params)
@@ -305,6 +356,15 @@ async def main():
             outputs = llm.generate(questions, sampling_params)
             logger.info(f"Generation finished with {len(outputs)} instances.")
             responses = [output.outputs[0].text for output in outputs]
+
+        # Strip <think>...</think> from responses
+        stripped_count = 0
+        for i, resp in enumerate(responses):
+            if '</think>' in resp:
+                responses[i] = resp.split('</think>')[-1].strip()
+                stripped_count += 1
+        if stripped_count:
+            print(f"Stripped thinking traces from {stripped_count}/{len(responses)} responses")
 
         # Add responses to the data
         for row, response in zip(data, responses):
@@ -320,7 +380,7 @@ async def main():
             print(rouge_score.score(responses[0], references[0]))
 
         # Save the generated responses
-        saving_path = f"./output/eval_{model_name.split('/')[-1]}_{test_task}.jsonl"
+        saving_path = os.path.join(args.output_dir, f"eval_{model_name.split('/')[-1]}_{test_task}.jsonl")
         with open(saving_path, 'w') as file:
             for row in data:
                 file.write(json.dumps(row) + '\n')
@@ -331,7 +391,7 @@ async def main():
         evaluation_results = await evaluate_metrics(references, responses, metrics)
 
         # Save the evaluation results
-        saving_path = f"./output/eval_{model_name.split('/')[-1]}_{test_task}_results.jsonl"
+        saving_path = os.path.join(args.output_dir, f"eval_{model_name.split('/')[-1]}_{test_task}_results.jsonl")
         with open(saving_path, 'w') as file:
             for eval_row, row in zip(evaluation_results, data):
                 row.update(eval_row)
@@ -378,7 +438,7 @@ async def main():
                     print(f"{metric} {sub_metric} - Mean: N/A, Standard Deviation: N/A")
 
         # Write to file
-        with open(f"./logs/results/{model_name.split('/')[-1]}_{test_task}_results.json", 'w') as file:
+        with open(os.path.join(args.output_dir, "logs", "results", f"{model_name.split('/')[-1]}_{test_task}_results.json"), 'w') as file:
             file.write(json.dumps(summary_stats, default=str))  # Handle None types
     
 
