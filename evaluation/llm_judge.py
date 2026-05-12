@@ -221,7 +221,6 @@ async def main():
                     task_name = "style_compliance"
                 elif task["template"] == INSTRUCTION_PRIORITY:
                     task_name = "instruction_priority"
-                    all_queries.append({"task": task_name, "prompt": [{"role": "user", "content": prompt}]})
                 else:
                     raise ValueError(f"Unknown task template {task['template']}.")
             all_queries.append({"task": task_name, "prompt": [{"role": "user", "content": prompt}]})
